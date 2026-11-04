@@ -74,8 +74,8 @@ jobs:
       - name: osv-scanner (SARIF)
         continue-on-error: true
         run: |
-          osv-scanner scan source -r . --format sarif --output osv-scanner.sarif || true
-          osv-scanner scan source -r . --format json --output osv-scanner-report.json || true
+          osv-scanner scan source -r . --format sarif --output-file osv-scanner.sarif || true
+          osv-scanner scan source -r . --format json --output-file osv-scanner-report.json || true
       - name: bandit (code)
         id: bandit
         continue-on-error: true
