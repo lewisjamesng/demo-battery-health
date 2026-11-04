@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q src
+      - run: PYTHONPATH=src python -c "import battery_health"
+
+  test:
+    name: test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest --junitxml=pytest-report.xml
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-report
+          path: pytest-report.xml
+          if-no-files-found: warn
+
+  security-scan:
+    name: security-scan
+    # Findings are expected on the baseline: keep the workflow green, show warnings.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      OSV_SCANNER_VERSION: v2.7.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install scanners
+        run: |
+          python -m pip install pip-audit "bandit[sarif]"
+          curl -sSfL -o /usr/local/bin/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          chmod +x /usr/local/bin/osv-scanner
+      - name: pip-audit
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          pip-audit -r requirements.txt --format json --output pip-audit-report.json || true
+          pip-audit -r requirements.txt | tee pip-audit.txt
+          exit "${PIPESTATUS[0]}"
+      - name: osv-scanner (SARIF)
+        continue-on-error: true
+        run: |
+          osv-scanner scan source -r . --format sarif --output osv-scanner.sarif || true
+          osv-scanner scan source -r . --format json --output osv-scanner-report.json || true
+      - name: bandit (code)
+        id: bandit
+        continue-on-error: true
+        run: |
+          bandit -r src -f sarif -o bandit.sarif || true
+          bandit -r src -f txt | tee bandit.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Flag findings
+        if: always()
+        run: |
+          {
+            echo '## Security scan'
+            echo '### pip-audit'
+            echo '```'
+            cat pip-audit.txt
+            echo '```'
+            echo '### bandit'
+            echo '```'
+            tail -n 25 bandit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.pip_audit.outcome }}" = "failure" ]; then
+            echo "::warning title=Vulnerable dependencies::pip-audit reported known vulnerabilities. See the security-scan artifact and code scanning alerts."
+          fi
+          if [ "${{ steps.bandit.outcome }}" = "failure" ]; then
+            echo "::warning title=Insecure code pattern::bandit reported issues. See the security-scan artifact and code scanning alerts."
+          fi
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-scan-reports
+          path: |
+            pip-audit-report.json
+            pip-audit.txt
+            osv-scanner-report.json
+            osv-scanner.sarif
+            bandit.sarif
+            bandit.txt
+          if-no-files-found: warn
+      - name: Upload osv-scanner SARIF to code scanning
+        if: always() && hashFiles('osv-scanner.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: osv-scanner.sarif
+          category: osv-scanner
+      - name: Upload bandit SARIF to code scanning
+        if: always() && hashFiles('bandit.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit

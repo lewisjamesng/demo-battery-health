@@ -1,0 +1,16 @@
+# Synthetic battery-health scoring weights for the demo.
+weights:
+  capacity: 0.6
+  internal_resistance: 0.25
+  cycle_count: 0.15
+limits:
+  max_cycles: 2000
+  nominal_resistance_mohm: 60
+  max_resistance_mohm: 140
+bands:
+  - min_score: 85
+    label: good
+  - min_score: 70
+    label: fair
+  - min_score: 0
+    label: replace-soon
